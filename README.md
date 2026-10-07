@@ -1,5 +1,3 @@
 # Morphotheque shape explorer
 
-Static gallery of 1,656 sampled designs. Both playable and blocked areas are built from A2-A36 tiles. Repeated sizes allowed. This is a sampled collection, not an exhaustive enumeration.
-
-GitHub Pages: deploy from main, / (root). The page works on its own; no build step required.
+11,354 sampled designs with exact black and white tile solutions. Browse, star designs, paint separate copies, group consecutive designs, and download PNG image pairs and tile data in ZIP files. Favorites are stored only in the visitor's browser on their device. This is not an exhaustive enumeration.
