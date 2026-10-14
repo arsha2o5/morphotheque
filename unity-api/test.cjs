@@ -20,3 +20,5 @@ test('HTTP publish, idempotent repeat, get, catalog, CORS and error handling',as
 });
 
 test('supplied gallery levels are preserved and malformed levels rejected',()=>{const base=validateSnapshot(original);const input={...original,levels:base.levels};const published=validateSnapshot(input);assert.deepEqual(published.levels,base.levels);input.levels=structuredClone(base.levels);input.levels[0].solution[0].x++;assert.throws(()=>validateSnapshot(input));});
+
+test('database URL accepts copied whitespace/quotes and rejects dashboard/hostname values',()=>{const {databaseUrl}=require('./server.cjs');const value='postgresql://demo:example@db.internal/demo';assert.equal(databaseUrl('  '+value+'\n'),value);assert.equal(databaseUrl('"'+value+'"'),value);assert.throws(()=>databaseUrl('db.internal'));assert.throws(()=>databaseUrl('https://dashboard.render.com'));});

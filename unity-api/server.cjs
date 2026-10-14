@@ -29,14 +29,23 @@ function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.o
   }catch(error){console.error('API request failed:',error.code||error.name);return send(503,{error:'Storage unavailable. Publishing was not confirmed; try again.'});}
  };
 }
+function databaseUrl(value){
+ let text=String(value||'').trim();
+ if((text.startsWith('"')&&text.endsWith('"'))||(text.startsWith("'")&&text.endsWith("'")))text=text.slice(1,-1).trim();
+ let parsed;try{parsed=new URL(text);}catch{throw Error('DATABASE_URL must contain the full copied PostgreSQL connection URL.');}
+ if(!['postgres:','postgresql:'].includes(parsed.protocol)||!parsed.hostname||!parsed.username||!parsed.pathname.slice(1))throw Error('DATABASE_URL must be the complete PostgreSQL connection URL, not the hostname or dashboard URL.');
+ return text;
+}
 async function main(){
  const {Pool}=require('pg');if(!process.env.DATABASE_URL){console.error('DATABASE_URL is not configured. Add the private internal Render Postgres URL in the service environment.');process.exitCode=1;return;}
- const pool=new Pool({connectionString:process.env.DATABASE_URL,max:5,connectionTimeoutMillis:10000});
+ let connectionString;try{connectionString=databaseUrl(process.env.DATABASE_URL);}catch(error){console.error(error.message);process.exitCode=1;return;}
+ const hostname=new URL(connectionString).hostname;console.log('Database connection hostname:',hostname);
+ const pool=new Pool({connectionString,max:5,connectionTimeoutMillis:10000});
  await pool.query('CREATE TABLE IF NOT EXISTS unity_lands (id text PRIMARY KEY, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now())');
  const store={health:()=>pool.query('SELECT 1'),save:async p=>{const result=await pool.query('INSERT INTO unity_lands (id,payload) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING created_at',[p.id,p]);if(result.rows.length)return {created:true,created_at:result.rows[0].created_at};const existing=await pool.query('SELECT created_at FROM unity_lands WHERE id=$1',[p.id]);return {created:false,created_at:existing.rows[0].created_at};},get:async id=>(await pool.query('SELECT payload,created_at FROM unity_lands WHERE id=$1',[id])).rows[0],list:async(limit,after)=>(await pool.query("SELECT id, created_at, payload->>'source_id' AS source_id, jsonb_array_length(payload->'levels') AS level_count FROM unity_lands WHERE id>$1 ORDER BY id LIMIT $2",[after,limit])).rows};
  const server=http.createServer(createHandler(store,{baseUrl:(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,''),allowedOrigins:(process.env.ALLOWED_ORIGINS||'https://morphotheque.onrender.com').split(',')}));
  server.listen(Number(process.env.PORT)||10000,'0.0.0.0',()=>console.log('Unity publishing API listening'));
  process.on('SIGTERM',()=>server.close(()=>pool.end().then(()=>process.exit(0))));
 }
-if(require.main===module)main().catch(e=>{console.error('Startup failed:',e.code||e.name);process.exitCode=1;});
-module.exports={createHandler};
+if(require.main===module)main().catch(e=>{console.error('Startup failed:',e.code||e.name);if(e.code==='ENOTFOUND')console.error('Database hostname could not be resolved:',/^[a-zA-Z0-9.-]+$/.test(e.hostname||'')?e.hostname:'unavailable');process.exitCode=1;});
+module.exports={createHandler,databaseUrl};
