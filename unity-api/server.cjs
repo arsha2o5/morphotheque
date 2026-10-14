@@ -30,7 +30,7 @@ function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.o
  };
 }
 async function main(){
- const {Pool}=require('pg');if(!process.env.DATABASE_URL)throw Error('Set DATABASE_URL to the Render Postgres internal connection URL');
+ const {Pool}=require('pg');if(!process.env.DATABASE_URL){console.error('DATABASE_URL is not configured. Add the private internal Render Postgres URL in the service environment.');process.exitCode=1;return;}
  const pool=new Pool({connectionString:process.env.DATABASE_URL,max:5,connectionTimeoutMillis:10000});
  await pool.query('CREATE TABLE IF NOT EXISTS unity_lands (id text PRIMARY KEY, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now())');
  const store={health:()=>pool.query('SELECT 1'),save:async p=>{const result=await pool.query('INSERT INTO unity_lands (id,payload) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING created_at',[p.id,p]);if(result.rows.length)return {created:true,created_at:result.rows[0].created_at};const existing=await pool.query('SELECT created_at FROM unity_lands WHERE id=$1',[p.id]);return {created:false,created_at:existing.rows[0].created_at};},get:async id=>(await pool.query('SELECT payload,created_at FROM unity_lands WHERE id=$1',[id])).rows[0],list:async(limit,after)=>(await pool.query("SELECT id, created_at, payload->>'source_id' AS source_id, jsonb_array_length(payload->'levels') AS level_count FROM unity_lands WHERE id>$1 ORDER BY id LIMIT $2",[after,limit])).rows};

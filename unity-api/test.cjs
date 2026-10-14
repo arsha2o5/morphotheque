@@ -18,3 +18,5 @@ test('HTTP publish, idempotent repeat, get, catalog, CORS and error handling',as
  assert.equal((await fetch(base+'/api/v1/lands?after=bad')).status,400);
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+test('supplied gallery levels are preserved and malformed levels rejected',()=>{const base=validateSnapshot(original);const input={...original,levels:base.levels};const published=validateSnapshot(input);assert.deepEqual(published.levels,base.levels);input.levels=structuredClone(base.levels);input.levels[0].solution[0].x++;assert.throws(()=>validateSnapshot(input));});

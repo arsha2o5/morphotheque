@@ -1,6 +1,6 @@
 # Unity publishing API
 
-Push to Unity publishes the selected land or painted copy as an immutable public snapshot. It does not star the land, alter the source, or remove published snapshots when unstarred. The server validates exact tile dimensions, bounds, non-overlap, and complete black/white coverage, then generates and verifies 1–4 difficulty solutions itself. Publishing the same canonical configuration twice returns the same ID.
+Push to Unity publishes the selected land or painted copy as an immutable public snapshot. It does not star the land, alter the source, or remove published snapshots when unstarred. The server validates exact tile dimensions, bounds, non-overlap, and complete black/white coverage, then validates the supplied 1–4 difficulty solutions (or generates them when omitted). Publishing the same canonical configuration twice returns the same ID.
 
 Base: https://morphotheque-unity-api.onrender.com
 
