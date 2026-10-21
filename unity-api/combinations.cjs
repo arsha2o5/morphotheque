@@ -1,7 +1,7 @@
 const {createHash}=require('node:crypto');
 const signature=inventory=>inventory.map(p=>[p.piece,p.count]).sort((a,b)=>a[0].localeCompare(b[0])).map(p=>p.join(':')).join(',');
 function inventoryFor(levels){const counts=new Map();for(const l of levels)for(const p of l.inventory)counts.set(p.piece,(counts.get(p.piece)||0)+p.count);return [...counts].sort().map(([piece,count])=>({piece,count}));}
-function uniqueLevels(land){const seen=new Set();return land.levels.filter(l=>{const key=JSON.stringify(l.solution);if(seen.has(key))return false;seen.add(key);return true;});}
+function uniqueLevels(land){const seen=new Set();return land.levels.filter(l=>{const key=JSON.stringify(l.solution??{level:l.level,tile_count:l.tile_count,inventory:l.inventory});if(seen.has(key))return false;seen.add(key);return true;});}
 // Counts verified combinations of the stored solutions, not all possible tilings.
 function evaluate(lands,pieceCount,{inventory=null,budget=100000,witnessLimit=100}={}){
  const options=lands.map(uniqueLevels),groups=new Map();let visited=0,truncated=false;
@@ -16,11 +16,11 @@ function evaluate(lands,pieceCount,{inventory=null,budget=100000,witnessLimit=10
 }
 function search(lands,{layer_count=10,piece_count,min_solutions=1,limit=10,allow_repeated_lands=false}={}){
  for(const [name,value,lo,hi]of [['layer_count',layer_count,1,24],['piece_count',piece_count,1,1176],['min_solutions',min_solutions,1,100],['limit',limit,1,30]])if(!Number.isInteger(value)||value<lo||value>hi)throw Error(`${name} must be an integer from ${lo} to ${hi}.`);
- if(!lands.length||(!allow_repeated_lands&&lands.length<layer_count))return {combinations:[],search_complete:true,message:'Not enough published lands. Add lands or allow repeated lands.'};
+ if(!lands.length||(!allow_repeated_lands&&lands.length<layer_count))return {combinations:[],search_complete:true,message:'Not enough accessible lands for this stack. Reduce layers or allow repeated lands.'};
  const results=[],seen=new Set();let seed=1729,visited=0,attempts=0,truncated=false;
  const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
  while(attempts++<120&&results.length<limit&&visited<600000){
-  const chosen=allow_repeated_lands?Array.from({length:layer_count},()=>lands[Math.floor(random()*lands.length)]):lands.map(x=>({x,key:random()})).sort((a,b)=>a.key-b.key).slice(0,layer_count).map(a=>a.x);
+  const indices=[];while(indices.length<layer_count){const index=Math.floor(random()*lands.length);if(allow_repeated_lands||!indices.includes(index))indices.push(index);}const chosen=indices.map(i=>lands[i]);
   const setKey=chosen.map(l=>l.id).sort().join(',');if(seen.has(setKey))continue;seen.add(setKey);
   const checked=evaluate(chosen,piece_count,{budget:Math.min(100000,600000-visited)});visited+=checked.visited;truncated ||= checked.truncated;
   for(const group of checked.groups)if(group.solution_count>=min_solutions){results.push({land_ids:chosen.map(l=>l.id),layer_count,piece_count,...group,count_is_lower_bound:checked.truncated});if(results.length>=limit)break;}

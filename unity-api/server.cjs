@@ -2,7 +2,7 @@ const http=require('node:http');
 const {validateSnapshot}=require('./geometry.cjs');
 const {search,makeGame}=require('./combinations.cjs');
 async function readBody(req,max=131072){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>max)throw Error('Request too large.');}return JSON.parse(text);}
-function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.onrender.com']}={}){
+function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.onrender.com'],catalog=null}={}){
  const hits=new Map();
  return async(req,res)=>{
   const headers={'Content-Type':'application/json; charset=utf-8','X-Content-Type-Options':'nosniff','Cache-Control':'no-store'};
@@ -13,16 +13,21 @@ function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.o
    const url=new URL(req.url,'http://localhost');
    if(req.method==='OPTIONS'){if(origin&&!allowedOrigins.includes(origin))return send(403,{error:'Origin not allowed'});return send(204,{}, {'Access-Control-Allow-Methods':'GET, POST, PATCH, DELETE, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'600'});}
    if(['POST','PATCH','DELETE'].includes(req.method)&&origin&&!allowedOrigins.includes(origin))return send(403,{error:'Origin not allowed'});
+   if(url.pathname==='/api/v1/combinations/catalog'&&req.method==='GET'){const published=await store.catalog();return send(200,{website_lands:catalog?catalog.count():0,published_lands:published.length,source:'Full website catalog plus additional active published lands'});}
+   const catalogMatch=url.pathname.match(/^\/api\/v1\/catalog\/lands\/([1-9]\d*)$/);
+   if(catalogMatch&&req.method==='GET'){const land=catalog?.get('catalog:'+catalogMatch[1]);return land?send(200,{...land,reference_id:'catalog:'+catalogMatch[1]}):send(404,{error:'Catalog land not found'});}
    if(url.pathname==='/api/v1/combinations/search'&&req.method==='POST'){
-    try{const input=await readBody(req);const lands=await store.catalog();return send(200,search(lands,input));}catch(error){return send(422,{error:error.message});}
+    try{const input=await readBody(req);const published=await store.catalog();const lands=catalog?catalog.merge(published):published;return send(200,{...search(lands,input),eligible_land_count:lands.length,website_land_count:catalog?catalog.count():0});}catch(error){return send(422,{error:error.message});}
    }
    if(url.pathname==='/api/v1/games'&&req.method==='POST'){
-    try{const input=await readBody(req);if(!Array.isArray(input.land_ids)||!input.land_ids.length||input.land_ids.length>24||input.land_ids.some(id=>!/[a-f0-9]{64}/.test(id)))throw Error('Invalid layer IDs.');
-     const lands=[];for(const id of input.land_ids){const row=await store.get(id);if(!row||row.enabled===false)throw Error('A layer is missing or unpublished.');lands.push(row.payload);}
+    try{const input=await readBody(req);if(!Array.isArray(input.land_ids)||!input.land_ids.length||input.land_ids.length>24||input.land_ids.some(id=>typeof id!=='string'||!/^([a-f0-9]{64}|catalog:[1-9]\d*)$/.test(id)))throw Error('Invalid layer IDs.');
+     const lands=[];for(const id of input.land_ids){if(id.startsWith('catalog:')){const land=catalog?.get(id);if(!land)throw Error('A website land is missing.');lands.push(land);}else{const row=await store.get(id);if(!row||row.enabled===false)throw Error('A layer is missing or unpublished.');lands.push(row.payload);}}
      const game=makeGame(lands,input.inventory);await store.saveGame(game);return send(201,{...game,url:baseUrl+'/api/v1/games/'+game.id});
     }catch(error){return send(422,{error:error.message});}
    }
    if(url.pathname==='/api/v1/games'&&req.method==='GET')return send(200,{games:await store.listGames()});
+   const activateMatch=url.pathname.match(/^\/api\/v1\/games\/([a-f0-9]{64})\/activate$/);
+   if(activateMatch&&req.method==='POST'){const row=await store.getGame(activateMatch[1]);if(!row)return send(404,{error:'Game not found'});await store.saveGame(row.payload);return send(200,{id:row.payload.id,active:true});}
    const gameMatch=url.pathname.match(/^\/api\/v1\/games\/(active|[a-f0-9]{64})$/);
    if(gameMatch&&req.method==='GET'){const row=await store.getGame(gameMatch[1]);return row?send(200,{...row.payload,created_at:row.created_at}):send(404,{error:'Game not found'});}
    const manageMatch=url.pathname.match(/^\/api\/v1\/lands\/([a-f0-9]{64})$/);
@@ -71,7 +76,8 @@ async function main(){
  store.saveGame=async p=>pool.query('INSERT INTO unity_games(id,payload) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET activated_at=now()',[p.id,p]);
  store.getGame=async id=>(await pool.query(id==='active'?'SELECT payload,created_at FROM unity_games ORDER BY activated_at DESC,id LIMIT 1':'SELECT payload,created_at FROM unity_games WHERE id=$1',id==='active'?[]:[id])).rows[0];
  store.listGames=async()=>(await pool.query("SELECT id,created_at,activated_at,payload->>'layer_count' AS layer_count,payload->>'piece_count' AS piece_count FROM unity_games ORDER BY activated_at DESC LIMIT 100")).rows;
- const server=http.createServer(createHandler(store,{baseUrl:(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,''),allowedOrigins:(process.env.ALLOWED_ORIGINS||'https://morphotheque.onrender.com').split(',')}));
+ const {createCatalog}=require('./catalog.cjs');
+ const server=http.createServer(createHandler(store,{catalog:createCatalog(),baseUrl:(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,''),allowedOrigins:(process.env.ALLOWED_ORIGINS||'https://morphotheque.onrender.com').split(',')}));
  server.listen(Number(process.env.PORT)||10000,'0.0.0.0',()=>console.log('Unity publishing API listening'));
  process.on('SIGTERM',()=>server.close(()=>pool.end().then(()=>process.exit(0))));
 }
