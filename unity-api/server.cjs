@@ -1,5 +1,7 @@
 const http=require('node:http');
 const {validateSnapshot}=require('./geometry.cjs');
+const {search,makeGame}=require('./combinations.cjs');
+async function readBody(req,max=131072){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>max)throw Error('Request too large.');}return JSON.parse(text);}
 function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.onrender.com']}={}){
  const hits=new Map();
  return async(req,res)=>{
@@ -9,7 +11,24 @@ function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.o
   const send=(code,body,extra={})=>{res.writeHead(code,{...headers,...extra});res.end(JSON.stringify(body));};
   try{
    const url=new URL(req.url,'http://localhost');
-   if(req.method==='OPTIONS'){if(origin&&!allowedOrigins.includes(origin))return send(403,{error:'Origin not allowed'});return send(204,{}, {'Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'600'});}
+   if(req.method==='OPTIONS'){if(origin&&!allowedOrigins.includes(origin))return send(403,{error:'Origin not allowed'});return send(204,{}, {'Access-Control-Allow-Methods':'GET, POST, PATCH, DELETE, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'600'});}
+   if(['POST','PATCH','DELETE'].includes(req.method)&&origin&&!allowedOrigins.includes(origin))return send(403,{error:'Origin not allowed'});
+   if(url.pathname==='/api/v1/combinations/search'&&req.method==='POST'){
+    try{const input=await readBody(req);const lands=await store.catalog();return send(200,search(lands,input));}catch(error){return send(422,{error:error.message});}
+   }
+   if(url.pathname==='/api/v1/games'&&req.method==='POST'){
+    try{const input=await readBody(req);if(!Array.isArray(input.land_ids)||!input.land_ids.length||input.land_ids.length>24||input.land_ids.some(id=>!/[a-f0-9]{64}/.test(id)))throw Error('Invalid layer IDs.');
+     const lands=[];for(const id of input.land_ids){const row=await store.get(id);if(!row||row.enabled===false)throw Error('A layer is missing or unpublished.');lands.push(row.payload);}
+     const game=makeGame(lands,input.inventory);await store.saveGame(game);return send(201,{...game,url:baseUrl+'/api/v1/games/'+game.id});
+    }catch(error){return send(422,{error:error.message});}
+   }
+   if(url.pathname==='/api/v1/games'&&req.method==='GET')return send(200,{games:await store.listGames()});
+   const gameMatch=url.pathname.match(/^\/api\/v1\/games\/(active|[a-f0-9]{64})$/);
+   if(gameMatch&&req.method==='GET'){const row=await store.getGame(gameMatch[1]);return row?send(200,{...row.payload,created_at:row.created_at}):send(404,{error:'Game not found'});}
+   const manageMatch=url.pathname.match(/^\/api\/v1\/lands\/([a-f0-9]{64})$/);
+   if(manageMatch&&['PATCH','DELETE'].includes(req.method)){
+    try{const input=req.method==='DELETE'?{enabled:false}:await readBody(req);if(input.enabled!==undefined&&typeof input.enabled!=='boolean')throw Error('enabled must be boolean.');if(input.title!==undefined&&(typeof input.title!=='string'||input.title.length>100))throw Error('Title must contain at most 100 characters.');const row=await store.update(manageMatch[1],input);return row?send(200,row):send(404,{error:'Land not found'});}catch(error){return send(422,{error:error.message});}
+   }
    if(url.pathname==='/health'){await store.health();return send(200,{status:'ok',schema_version:1});}
    if(url.pathname==='/api/v1/lands'&&req.method==='POST'){
     if(origin&&!allowedOrigins.includes(origin))return send(403,{error:'Origin not allowed'});
@@ -21,7 +40,7 @@ function createHandler(store,{baseUrl='',allowedOrigins=['https://morphotheque.o
    }
    if(url.pathname==='/api/v1/lands'&&req.method==='GET'){
     const limit=Math.min(100,Math.max(1,Number.parseInt(url.searchParams.get('limit'))||50));const after=url.searchParams.get('after')||'';if(after&&!/^[a-f0-9]{64}$/.test(after))return send(400,{error:'Invalid pagination cursor'});
-    const rows=await store.list(limit+1,after);const more=rows.length>limit;const selected=rows.slice(0,limit);return send(200,{schema_version:1,lands:selected.map(r=>({...r,url:baseUrl+'/api/v1/lands/'+r.id})),next_cursor:more?selected[selected.length-1].id:null});
+    const rows=await store.list(limit+1,after,url.searchParams.get('include_unpublished')==='true');const more=rows.length>limit;const selected=rows.slice(0,limit);return send(200,{schema_version:1,lands:selected.map(r=>({...r,url:baseUrl+'/api/v1/lands/'+r.id})),next_cursor:more?selected[selected.length-1].id:null});
    }
    const match=url.pathname.match(/^\/api\/v1\/lands\/([a-f0-9]{64})$/);
    if(match&&req.method==='GET'){const row=await store.get(match[1]);if(!row)return send(404,{error:'Land not found'});return send(200,{...row.payload,created_at:row.created_at});}
@@ -42,7 +61,16 @@ async function main(){
  const hostname=new URL(connectionString).hostname;console.log('Database connection hostname:',hostname);
  const pool=new Pool({connectionString,max:5,connectionTimeoutMillis:10000});
  await pool.query('CREATE TABLE IF NOT EXISTS unity_lands (id text PRIMARY KEY, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now())');
+ await pool.query("ALTER TABLE unity_lands ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS title text NOT NULL DEFAULT ''");
+ await pool.query('CREATE TABLE IF NOT EXISTS unity_games (id text PRIMARY KEY, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), activated_at timestamptz NOT NULL DEFAULT now())');
  const store={health:()=>pool.query('SELECT 1'),save:async p=>{const result=await pool.query('INSERT INTO unity_lands (id,payload) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING created_at',[p.id,p]);if(result.rows.length)return {created:true,created_at:result.rows[0].created_at};const existing=await pool.query('SELECT created_at FROM unity_lands WHERE id=$1',[p.id]);return {created:false,created_at:existing.rows[0].created_at};},get:async id=>(await pool.query('SELECT payload,created_at FROM unity_lands WHERE id=$1',[id])).rows[0],list:async(limit,after)=>(await pool.query("SELECT id, created_at, payload->>'source_id' AS source_id, jsonb_array_length(payload->'levels') AS level_count FROM unity_lands WHERE id>$1 ORDER BY id LIMIT $2",[after,limit])).rows};
+ store.list=async(limit,after,include=false)=>(await pool.query("SELECT id, created_at, enabled, title, payload->>'source_id' AS source_id, jsonb_array_length(payload->'levels') AS level_count FROM unity_lands WHERE id>$1 AND ($3 OR enabled) ORDER BY id LIMIT $2",[after,limit,include])).rows;
+ store.get=async id=>(await pool.query('SELECT payload,created_at,enabled,title FROM unity_lands WHERE id=$1',[id])).rows[0];
+ store.catalog=async()=>(await pool.query('SELECT payload FROM unity_lands WHERE enabled ORDER BY id')).rows.map(r=>r.payload);
+ store.update=async(id,p)=>(await pool.query('UPDATE unity_lands SET enabled=COALESCE($2,enabled),title=COALESCE($3,title) WHERE id=$1 RETURNING id,enabled,title',[id,p.enabled??null,p.title??null])).rows[0];
+ store.saveGame=async p=>pool.query('INSERT INTO unity_games(id,payload) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET activated_at=now()',[p.id,p]);
+ store.getGame=async id=>(await pool.query(id==='active'?'SELECT payload,created_at FROM unity_games ORDER BY activated_at DESC,id LIMIT 1':'SELECT payload,created_at FROM unity_games WHERE id=$1',id==='active'?[]:[id])).rows[0];
+ store.listGames=async()=>(await pool.query("SELECT id,created_at,activated_at,payload->>'layer_count' AS layer_count,payload->>'piece_count' AS piece_count FROM unity_games ORDER BY activated_at DESC LIMIT 100")).rows;
  const server=http.createServer(createHandler(store,{baseUrl:(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,''),allowedOrigins:(process.env.ALLOWED_ORIGINS||'https://morphotheque.onrender.com').split(',')}));
  server.listen(Number(process.env.PORT)||10000,'0.0.0.0',()=>console.log('Unity publishing API listening'));
  process.on('SIGTERM',()=>server.close(()=>pool.end().then(()=>process.exit(0))));

@@ -11,7 +11,17 @@ Base: https://morphotheque-unity-api.onrender.com
 
 Tiles contain piece, x, y, w, h. Coordinates are integers in twelfths of an inch on an 84-by-84 board; origin top-left, x right, y down. Unity scales these to its own world size. Use PublishedLandLoader.cs for the writable API's string IDs; the original MorphothequeLandLoader.cs is for the static catalog's numeric IDs.
 
-Snapshots are public. This prototype has anonymous append-only publication, origin checks for browser callers, a 128 KiB request limit, and a per-IP publishing limit. There is no public update/delete route and no account system. These limits are not a substitute for authenticated publishing before wider release.
+Snapshots are public. This prototype has anonymous publication and catalog management, origin checks for browser callers, a 128 KiB request limit, and a per-IP land-publishing limit. Catalog removal unpublishes the entry rather than deleting its immutable geometry; existing games keep their embedded snapshots. There is no account system. These limits are not a substitute for authenticated management before wider release.
+
+## Unity land manager and tower games
+
+Open /unity.html on the gallery. Published lands can be named, removed from the active catalog, restored, added through the shape explorer, or imported as validated land JSON. PATCH /api/v1/lands/{id} accepts title (at most 100 characters) and enabled (boolean). DELETE on the same URL unpublishes. GET /api/v1/lands?include_unpublished=true includes inactive entries.
+
+The Layer combinations tab accepts layer_count (default 10, maximum 24), piece_count (exact total), min_solutions (inclusive minimum), limit, and allow_repeated_lands. POST /api/v1/combinations/search returns ordered land IDs, one shared inventory, and verified solution assignments. Every counted assignment uses exactly the same counts of A2–A36, not merely the same total count. Only distinct stored solutions are counted; this is not an exhaustive tiling solver. The search has CPU/state limits, so absence of results does not prove no solution exists; truncated counts are explicitly lower bounds.
+
+POST /api/v1/games accepts land_ids in bottom-to-top order and inventory. The server independently verifies that the inventory solves the complete tower, stores embedded land snapshots, and makes that game active. GET /api/v1/games lists recent games; GET /api/v1/games/{id} fetches one, and GET /api/v1/games/active fetches the most recently pushed game. Reposting activates an existing game. Games have their own immutable IDs and preserve geometry even after a source land is unpublished.
+
+Unity fetches the active game on each fresh Play session. Set PublishedLandPreview.gameId to pin a game, or disable loadActiveTower for the previous single-land flow. A 404 for the active game falls back to the configured single land; other errors are not silently replaced with a different game.
 
 ## Prototype storage
 
